@@ -1,0 +1,158 @@
+name: CI Pipeline
+
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+    branches: [main, develop]
+
+jobs:
+  backend:
+    name: Backend Tests & Lint
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: server/package-lock.json
+
+      - name: Install dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Run linter
+        working-directory: server
+        run: npm run lint
+
+      - name: Run tests
+        working-directory: server
+        run: npm test -- --coverage
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        if: matrix.node-version == '20.x'
+        with:
+          files: ./server/coverage/coverage-final.json
+          flags: backend
+          name: backend-coverage
+
+  frontend:
+    name: Frontend Tests & Lint
+    runs-on: ubuntu-latest
+
+    strategy:
+      matrix:
+        node-version: [18.x, 20.x]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+          cache: "npm"
+          cache-dependency-path: client/package-lock.json
+
+      - name: Install dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Run linter
+        working-directory: client
+        run: npm run lint
+
+      - name: Run tests
+        working-directory: client
+        run: npm test -- --coverage
+
+      - name: Build application
+        working-directory: client
+        run: npm run build
+
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v3
+        if: matrix.node-version == '20.x'
+        with:
+          files: ./client/coverage/coverage-final.json
+          flags: frontend
+          name: frontend-coverage
+
+  build-artifacts:
+    name: Build & Package
+    runs-on: ubuntu-latest
+    needs: [backend, frontend]
+    if: success()
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+          cache: "npm"
+
+      - name: Install backend dependencies
+        working-directory: server
+        run: npm ci
+
+      - name: Install frontend dependencies
+        working-directory: client
+        run: npm ci
+
+      - name: Build frontend
+        working-directory: client
+        run: npm run build
+
+      - name: Check build output
+        run: |
+          echo "Frontend build artifacts:"
+          ls -la client/dist/
+          echo "Backend files:"
+          ls -la server/src/
+
+  security-audit:
+    name: Security Audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Use Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20.x"
+
+      - name: Audit backend dependencies
+        working-directory: server
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+      - name: Audit frontend dependencies
+        working-directory: client
+        run: npm audit --audit-level=moderate
+        continue-on-error: true
+
+  deploy-notification:
+    name: Deployment Ready
+    runs-on: ubuntu-latest
+    needs: [backend, frontend, build-artifacts]
+    if: success() && github.ref == 'refs/heads/main' && github.event_name == 'push'
+
+    steps:
+      - name: Notify deployment ready
+        run: |
+          echo "✅ All checks passed!"
+          echo "Application is ready for deployment to Render/Vercel"
+          echo "Branch: ${{ github.ref }}"
+          echo "Commit: ${{ github.sha }}"
